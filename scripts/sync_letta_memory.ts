@@ -64,6 +64,7 @@ interface HookInput {
 
 interface SessionState {
   conversationId?: string;
+  lastBlockValues?: { [label: string]: string };  // label -> value for change detection
 }
 
 // State directory helpers
@@ -120,6 +121,91 @@ function getConversationId(cwd: string, sessionId: string): string | null {
     }
   }
   return null;
+}
+
+/**
+ * Get last known block values from session state
+ */
+function getLastBlockValues(cwd: string, sessionId: string): { [label: string]: string } | null {
+  const stateFile = getSyncStateFile(cwd, sessionId);
+  if (fs.existsSync(stateFile)) {
+    try {
+      const state: SessionState = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
+      return state.lastBlockValues || null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Save current block values to session state for change detection
+ */
+function saveBlockValues(cwd: string, sessionId: string, blocks: MemoryBlock[]): void {
+  const stateFile = getSyncStateFile(cwd, sessionId);
+  let state: SessionState = {};
+  
+  // Load existing state
+  if (fs.existsSync(stateFile)) {
+    try {
+      state = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
+    } catch {
+      // Start fresh if parse fails
+    }
+  }
+  
+  // Update block values
+  state.lastBlockValues = {};
+  for (const block of blocks) {
+    state.lastBlockValues[block.label] = block.value;
+  }
+  
+  // Ensure directory exists
+  const dir = getDurableStateDir(cwd);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  
+  fs.writeFileSync(stateFile, JSON.stringify(state, null, 2), 'utf-8');
+}
+
+/**
+ * Detect which blocks have changed since last sync
+ */
+function detectChangedBlocks(
+  currentBlocks: MemoryBlock[],
+  lastBlockValues: { [label: string]: string } | null
+): MemoryBlock[] {
+  // First sync - no previous state, don't show all blocks as "changed"
+  if (!lastBlockValues) {
+    return [];
+  }
+  
+  return currentBlocks.filter(block => {
+    const previousValue = lastBlockValues[block.label];
+    // Changed if: new block (not in previous) or value differs
+    return previousValue === undefined || previousValue !== block.value;
+  });
+}
+
+/**
+ * Format changed blocks for stdout injection
+ */
+function formatChangedBlocksForStdout(changedBlocks: MemoryBlock[]): string {
+  if (changedBlocks.length === 0) {
+    return '';
+  }
+  
+  const formatted = changedBlocks.map(block => {
+    const escapedContent = escapeXmlContent(block.value || '');
+    return `<${block.label}>\n${escapedContent}\n</${block.label}>`;
+  }).join('\n');
+  
+  return `<letta_memory_update>
+<!-- Memory blocks updated since last prompt -->
+${formatted}
+</letta_memory_update>`;
 }
 
 /**
@@ -365,11 +451,14 @@ async function main(): Promise<void> {
     // Read hook input to get session ID for conversation lookup
     const hookInput = await readHookInput();
     const cwd = hookInput?.cwd || projectDir;
+    const sessionId = hookInput?.session_id;
     
-    // Get conversation ID from session state
+    // Get conversation ID and last block values from session state
     let conversationId: string | null = null;
-    if (hookInput?.session_id) {
-      conversationId = getConversationId(cwd, hookInput.session_id);
+    let lastBlockValues: { [label: string]: string } | null = null;
+    if (sessionId) {
+      conversationId = getConversationId(cwd, sessionId);
+      lastBlockValues = getLastBlockValues(cwd, sessionId);
     }
     
     // Fetch agent data and last message in parallel
@@ -378,16 +467,35 @@ async function main(): Promise<void> {
       fetchLastAssistantMessage(apiKey, agentId),
     ]);
     
+    // Detect which blocks have changed since last sync
+    const changedBlocks = detectChangedBlocks(agent.blocks || [], lastBlockValues);
+    
     // Format memory blocks as XML (includes context section)
     const lettaContent = formatMemoryBlocksAsXml(agent, conversationId);
     
-    // Update CLAUDE.md with memory blocks only
+    // Update CLAUDE.md with full memory blocks
     updateClaudeMd(cwd, lettaContent);
     
-    // Output last message to stdout - this gets injected before the user's prompt
+    // Save current block values for next sync's change detection
+    if (sessionId) {
+      saveBlockValues(cwd, sessionId, agent.blocks || []);
+    }
+    
+    // Output to stdout - this gets injected before the user's prompt
     // (UserPromptSubmit hooks add stdout to context)
+    const outputs: string[] = [];
+    
+    // Add changed blocks if any
+    const changedBlocksOutput = formatChangedBlocksForStdout(changedBlocks);
+    if (changedBlocksOutput) {
+      outputs.push(changedBlocksOutput);
+    }
+    
+    // Add last message
     const messageOutput = formatMessageForStdout(agent, lastMessage);
-    console.log(messageOutput);
+    outputs.push(messageOutput);
+    
+    console.log(outputs.join('\n\n'));
     
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
