@@ -68,6 +68,44 @@ If `LETTA_AGENT_ID` is not set, the plugin automatically imports a default "Subc
 
 This means zero-config setup: just set `LETTA_API_KEY` and the plugin handles the rest.
 
+## Default Subconscious Agent
+
+When no agent is configured, the plugin auto-imports a bundled "Subconscious" agent designed specifically for this use case.
+
+### What It Does
+
+The default agent acts as a persistent memory layer that:
+
+- **Observes** session transcripts asynchronously (not live conversation)
+- **Learns** your preferences from corrections, explicit statements, and patterns
+- **Tracks** project context, pending items, and session patterns
+- **Provides guidance** via the `<letta_message>` block when it has something useful
+
+### Memory Blocks
+
+The agent maintains several memory blocks:
+
+| Block | Purpose |
+|-------|---------|
+| `core_directives` | Role definition and behavioral guidelines |
+| `guidance` | Active guidance for the next session (this is what you see in `<letta_message>`) |
+| `user_preferences` | Learned coding style, tool preferences, communication style |
+| `project_context` | Codebase knowledge, architecture decisions, known gotchas |
+| `session_patterns` | Recurring behaviors, common struggles |
+| `pending_items` | Unfinished work, explicit TODOs |
+
+### Communication Style
+
+The agent is configured to be:
+
+- **Observational** - "I noticed..." not "You should..."
+- **Concise** - Technical, no filler
+- **Present but not intrusive** - Empty guidance is fine; it won't manufacture content
+
+### Two-Way Communication
+
+Claude Code can address the Subconscious agent directly in responses. The agent sees everything in the transcript and may respond on the next sync. It's designed for ongoing dialogue, not just one-way observation.
+
 ## Hooks
 
 The plugin uses three Claude Code hooks:
