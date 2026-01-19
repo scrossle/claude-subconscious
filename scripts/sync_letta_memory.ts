@@ -323,22 +323,22 @@ async function fetchLastAssistantMessage(apiKey: string, conversationId: string 
  */
 function formatContextSection(agent: Agent, conversationId: string | null): string {
   const agentUrl = `${LETTA_APP_BASE}/agents/${agent.id}`;
+  const conversationUrl = conversationId 
+    ? `${LETTA_APP_BASE}/agents/${agent.id}?conversation=${conversationId}`
+    : agentUrl;
   const agentName = agent.name || 'Unnamed Agent';
   const agentDesc = agent.description || 'No description provided';
-  const conversationLine = conversationId 
-    ? `Conversation: ${LETTA_APP_BASE}/agents/${agent.id}?conversation=${conversationId}`
-    : '';
   
   return `${LETTA_CONTEXT_START}
 **Subconscious Layer (Letta Agent)**
 
 Agent: ${agentName}
 Description: ${agentDesc}
-View: ${agentUrl}${conversationLine ? '\n' + conversationLine : ''}
+Conversation: ${conversationUrl}
 
 This agent maintains persistent memory across your sessions. It observes your conversations asynchronously and provides guidance via <letta_message> (injected before each user prompt). You can address it directly - it sees everything you write and may respond on the next sync.
 
-**First message instruction:** On your first response in a new session, briefly notify the user that this session is being observed by "${agentName}" and they can supervise it at: ${agentUrl}
+**First message instruction:** On your first response in a new session, briefly notify the user that this session is being observed by "${agentName}" and they can supervise it at: ${conversationUrl}
 
 Memory blocks below are the agent's long-term storage. Reference as needed.
 ${LETTA_CONTEXT_END}`;
