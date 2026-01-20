@@ -42,6 +42,35 @@ Install directly from GitHub:
 /plugin install github:letta-ai/claude-subconscious
 ```
 
+### Install from Source
+
+Clone the repository:
+
+```bash
+git clone https://github.com/letta-ai/claude-subconscious.git
+cd claude-subconscious
+```
+
+Install dependencies and build:
+
+```bash
+npm install
+npm run build
+```
+
+Enable the plugin in your project:
+
+```bash
+cd /path/to/your/project
+/plugin enable /path/to/claude-subconscious
+```
+
+Or enable globally for all projects:
+
+```bash
+/plugin enable --global /path/to/claude-subconscious
+```
+
 ## Configuration
 
 ### Required
