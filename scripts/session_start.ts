@@ -26,7 +26,8 @@ import * as path from 'path';
 import { getAgentId } from './agent_config.js';
 
 // Configuration
-const LETTA_API_BASE = 'https://api.letta.com/v1';
+const LETTA_BASE_URL = process.env.LETTA_BASE_URL || 'https://api.letta.com';
+const LETTA_API_BASE = `${LETTA_BASE_URL}/v1`;
 const TEMP_STATE_DIR = '/tmp/letta-claude-sync';
 const LOG_FILE = path.join(TEMP_STATE_DIR, 'session_start.log');
 

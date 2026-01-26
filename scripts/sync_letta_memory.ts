@@ -37,7 +37,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Configuration
-const LETTA_API_BASE = 'https://api.letta.com/v1';
+const LETTA_BASE_URL = process.env.LETTA_BASE_URL || 'https://api.letta.com';
+const LETTA_API_BASE = `${LETTA_BASE_URL}/v1`;
 const LETTA_APP_BASE = 'https://app.letta.com';
 const DEBUG = process.env.LETTA_DEBUG === '1';
 

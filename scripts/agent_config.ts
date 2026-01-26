@@ -14,7 +14,8 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const LETTA_API_BASE = 'https://api.letta.com/v1';
+const LETTA_BASE_URL = process.env.LETTA_BASE_URL || 'https://api.letta.com';
+const LETTA_API_BASE = `${LETTA_BASE_URL}/v1`;
 const CONFIG_DIR = path.join(process.env.HOME || '~', '.letta', 'claude-subconscious');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 const DEFAULT_AGENT_FILE = path.join(__dirname, '..', 'Subconscious.af');

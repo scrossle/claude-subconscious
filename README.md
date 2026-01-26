@@ -84,9 +84,11 @@ Get your API key from [app.letta.com](https://app.letta.com).
 
 ```bash
 export LETTA_AGENT_ID="agent-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+export LETTA_BASE_URL="http://localhost:8283"  # For self-hosted Letta
 ```
 
-If `LETTA_AGENT_ID` is not set, the plugin automatically imports a default "Subconscious" agent on first use.
+- `LETTA_AGENT_ID` - If not set, the plugin automatically imports a default "Subconscious" agent on first use.
+- `LETTA_BASE_URL` - For self-hosted Letta servers. Defaults to `https://api.letta.com`.
 
 ### Agent Resolution Order
 

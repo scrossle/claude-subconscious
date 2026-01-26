@@ -7,7 +7,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 // Configuration
-export const LETTA_API_BASE = 'https://api.letta.com/v1';
+const LETTA_BASE_URL = process.env.LETTA_BASE_URL || 'https://api.letta.com';
+export const LETTA_API_BASE = `${LETTA_BASE_URL}/v1`;
 
 // Types
 export interface SyncState {
