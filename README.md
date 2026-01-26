@@ -49,13 +49,7 @@ Clone the repository:
 ```bash
 git clone https://github.com/letta-ai/claude-subconscious.git
 cd claude-subconscious
-```
-
-Install dependencies and build:
-
-```bash
 npm install
-npm run build
 ```
 
 Enable the plugin in your project:

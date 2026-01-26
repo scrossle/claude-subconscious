@@ -27,28 +27,23 @@ import * as readline from 'readline';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { getAgentId } from './agent_config.js';
+import {
+  LETTA_API_BASE,
+  loadSyncState,
+  saveSyncState,
+  getOrCreateConversation,
+  getSyncStateFile,
+  SyncState,
+  LogFn,
+} from './conversation_utils.js';
 
 // ESM-compatible __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Configuration
-const LETTA_API_BASE = 'https://api.letta.com/v1';
 const TEMP_STATE_DIR = '/tmp/letta-claude-sync';  // Temp state (logs, etc.)
 const LOG_FILE = path.join(TEMP_STATE_DIR, 'send_messages.log');
-
-// Durable storage in .letta directory
-function getDurableStateDir(cwd: string): string {
-  return path.join(cwd, '.letta', 'claude');
-}
-
-function getConversationsFile(cwd: string): string {
-  return path.join(getDurableStateDir(cwd), 'conversations.json');
-}
-
-function getSyncStateFile(cwd: string, sessionId: string): string {
-  return path.join(getDurableStateDir(cwd), `session-${sessionId}.json`);
-}
 
 interface HookInput {
   session_id: string;
@@ -94,27 +89,7 @@ interface TranscriptMessage {
   };
 }
 
-interface SyncState {
-  lastProcessedIndex: number;
-  sessionId: string;
-  conversationId?: string;
-}
 
-interface ConversationEntry {
-  conversationId: string;
-  agentId: string;
-}
-
-// Support both old format (string) and new format (object) for backward compatibility
-interface ConversationsMap {
-  [sessionId: string]: string | ConversationEntry;
-}
-
-interface Conversation {
-  id: string;
-  agent_id: string;
-  created_at?: string;
-}
 
 /**
  * Ensure temp log directory exists
@@ -122,16 +97,6 @@ interface Conversation {
 function ensureLogDir(): void {
   if (!fs.existsSync(TEMP_STATE_DIR)) {
     fs.mkdirSync(TEMP_STATE_DIR, { recursive: true });
-  }
-}
-
-/**
- * Ensure durable state directory exists
- */
-function ensureDurableStateDir(cwd: string): void {
-  const dir = getDurableStateDir(cwd);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
   }
 }
 
@@ -196,149 +161,6 @@ async function readTranscript(transcriptPath: string): Promise<TranscriptMessage
   }
 
   return messages;
-}
-
-/**
- * Load sync state for this session
- */
-function loadSyncState(cwd: string, sessionId: string): SyncState {
-  const statePath = getSyncStateFile(cwd, sessionId);
-  
-  if (fs.existsSync(statePath)) {
-    try {
-      const state = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
-      log(`Loaded state: lastProcessedIndex=${state.lastProcessedIndex}`);
-      return state;
-    } catch (e) {
-      log(`Failed to load state: ${e}`);
-    }
-  }
-  
-  log(`No existing state, starting fresh`);
-  return { lastProcessedIndex: -1, sessionId };
-}
-
-/**
- * Save sync state for this session
- */
-function saveSyncState(cwd: string, state: SyncState): void {
-  ensureDurableStateDir(cwd);
-  const statePath = getSyncStateFile(cwd, state.sessionId);
-  fs.writeFileSync(statePath, JSON.stringify(state, null, 2), 'utf-8');
-  log(`Saved state: lastProcessedIndex=${state.lastProcessedIndex}, conversationId=${state.conversationId}`);
-}
-
-/**
- * Load conversations mapping
- */
-function loadConversationsMap(cwd: string): ConversationsMap {
-  const filePath = getConversationsFile(cwd);
-  if (fs.existsSync(filePath)) {
-    try {
-      return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-    } catch (e) {
-      log(`Failed to load conversations map: ${e}`);
-    }
-  }
-  return {};
-}
-
-/**
- * Save conversations mapping
- */
-function saveConversationsMap(cwd: string, map: ConversationsMap): void {
-  ensureDurableStateDir(cwd);
-  fs.writeFileSync(getConversationsFile(cwd), JSON.stringify(map, null, 2), 'utf-8');
-}
-
-/**
- * Create a new conversation for a session
- */
-async function createConversation(apiKey: string, agentId: string): Promise<string> {
-  const url = `${LETTA_API_BASE}/conversations?agent_id=${agentId}`;
-  
-  log(`Creating new conversation for agent ${agentId}`);
-  
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to create conversation: ${response.status} ${errorText}`);
-  }
-
-  const conversation: Conversation = await response.json();
-  log(`Created conversation: ${conversation.id}`);
-  return conversation.id;
-}
-
-/**
- * Get or create conversation for a session
- */
-async function getOrCreateConversation(
-  apiKey: string,
-  agentId: string,
-  sessionId: string,
-  cwd: string,
-  state: SyncState
-): Promise<string> {
-  // Check if we already have a conversation ID in state
-  // Note: state.conversationId should already be validated by SessionStart hook
-  if (state.conversationId) {
-    log(`Using existing conversation from state: ${state.conversationId}`);
-    return state.conversationId;
-  }
-
-  // Check the conversations map
-  const conversationsMap = loadConversationsMap(cwd);
-  const cached = conversationsMap[sessionId];
-
-  if (cached) {
-    // Parse both old format (string) and new format (object)
-    const entry = typeof cached === 'string'
-      ? { conversationId: cached, agentId: null as string | null }
-      : cached;
-
-    if (entry.agentId && entry.agentId !== agentId) {
-      // Agent ID changed - clear stale entry and create new conversation
-      log(`Agent ID changed (${entry.agentId} -> ${agentId}), clearing stale conversation`);
-      delete conversationsMap[sessionId];
-      const conversationId = await createConversation(apiKey, agentId);
-      conversationsMap[sessionId] = { conversationId, agentId };
-      saveConversationsMap(cwd, conversationsMap);
-      state.conversationId = conversationId;
-      return conversationId;
-    } else if (!entry.agentId) {
-      // Old format without agentId - upgrade by recreating
-      log(`Upgrading old format entry (no agentId stored), creating new conversation`);
-      delete conversationsMap[sessionId];
-      const conversationId = await createConversation(apiKey, agentId);
-      conversationsMap[sessionId] = { conversationId, agentId };
-      saveConversationsMap(cwd, conversationsMap);
-      state.conversationId = conversationId;
-      return conversationId;
-    } else {
-      // Valid entry with matching agentId - reuse
-      log(`Found conversation in map: ${entry.conversationId}`);
-      state.conversationId = entry.conversationId;
-      return entry.conversationId;
-    }
-  }
-
-  // No existing entry - create a new conversation
-  const conversationId = await createConversation(apiKey, agentId);
-
-  // Save to map and state
-  conversationsMap[sessionId] = { conversationId, agentId };
-  saveConversationsMap(cwd, conversationsMap);
-  state.conversationId = conversationId;
-
-  return conversationId;
 }
 
 /**
@@ -701,7 +523,7 @@ async function main(): Promise<void> {
     log(`Message types: ${JSON.stringify(typeCounts)}`);
 
     // Load sync state (from durable storage)
-    const state = loadSyncState(hookInput.cwd, hookInput.session_id);
+    const state = loadSyncState(hookInput.cwd, hookInput.session_id, log);
     
     // Format new messages
     const newMessages = formatMessagesForLetta(messages, state.lastProcessedIndex);
@@ -712,11 +534,11 @@ async function main(): Promise<void> {
     }
 
     // Get or create conversation for this session
-    const conversationId = await getOrCreateConversation(apiKey, agentId, hookInput.session_id, hookInput.cwd, state);
+    const conversationId = await getOrCreateConversation(apiKey, agentId, hookInput.session_id, hookInput.cwd, state, log);
     log(`Using conversation: ${conversationId}`);
 
     // Save state now (with conversation ID) so it persists even if worker fails
-    saveSyncState(hookInput.cwd, state);
+    saveSyncState(hookInput.cwd, state, log);
 
     // Build the message payload (same format as sendBatchToConversation)
     const transcriptEntries = newMessages.map(m => {
