@@ -40,10 +40,11 @@ Letta does simple management of your `CLAUDE.md` file, and injects some content 
 
 ## Installation
 
-Install directly from GitHub:
+Install from GitHub:
 
 ```
-/plugin install github:letta-ai/claude-subconscious
+/plugin marketplace add letta-ai/claude-subconscious
+/plugin install claude-subconscious@letta-ai-claude-subconscious
 ```
 
 ### Install from Source
@@ -110,7 +111,7 @@ The default agent acts as a persistent memory layer that:
 
 ### Memory Blocks
 
-The agent maintains 8 memory blocks:
+The default agent Subconscious maintains 8 memory blocks:
 
 | Block | Purpose |
 |-------|---------|
@@ -123,9 +124,11 @@ The agent maintains 8 memory blocks:
 | `self_improvement` | Guidelines for evolving memory architecture over time |
 | `tool_guidelines` | How to use available tools (memory, search, web) |
 
+If you set an alternative agent using `LETTA_AGENT_ID`, your agent will use its existing memory architecture.
+
 ### Communication Style
 
-The agent is configured to be:
+Subconscious is configured to be:
 
 - **Observational** - "I noticed..." not "You should..."
 - **Concise** - Technical, no filler
