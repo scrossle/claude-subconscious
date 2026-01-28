@@ -323,13 +323,25 @@ async function main(): Promise<void> {
     }
     saveSyncState(hookInput.cwd, state);
 
+    // Build user-visible message if there are new messages from Sub
+    let systemMessage: string | undefined;
+    if (newMessages.length > 0) {
+      const agentName = agent.name || 'Subconscious';
+      const preview = newMessages[0].text.slice(0, 100) + (newMessages[0].text.length > 100 ? '...' : '');
+      systemMessage = `💭 ${agentName}: ${preview}`;
+    }
+
     // Output JSON for PreToolUse
-    const output = {
+    const output: Record<string, unknown> = {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         additionalContext: `<letta_update>\n${additionalContext}\n</letta_update>`,
       },
     };
+    
+    if (systemMessage) {
+      output.systemMessage = systemMessage;
+    }
 
     console.log(JSON.stringify(output));
     
