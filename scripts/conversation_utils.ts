@@ -1,6 +1,6 @@
 /**
  * Shared conversation and state management utilities
- * Used by both sync_letta_memory.ts and send_messages_to_letta.ts
+ * Used by sync_letta_memory.ts, send_messages_to_letta.ts, and session_start.ts
  */
 
 import * as fs from 'fs';
@@ -9,6 +9,18 @@ import * as path from 'path';
 // Configuration
 const LETTA_BASE_URL = process.env.LETTA_BASE_URL || 'https://api.letta.com';
 export const LETTA_API_BASE = `${LETTA_BASE_URL}/v1`;
+// Only show app URL for hosted service; self-hosted users get IDs directly
+const IS_HOSTED = !process.env.LETTA_BASE_URL;
+const LETTA_APP_BASE = 'https://app.letta.com';
+
+// CLAUDE.md constants
+export const CLAUDE_MD_PATH = '.claude/CLAUDE.md';
+export const LETTA_SECTION_START = '<letta>';
+export const LETTA_SECTION_END = '</letta>';
+const LETTA_CONTEXT_START = '<letta_context>';
+const LETTA_CONTEXT_END = '</letta_context>';
+const LETTA_MEMORY_START = '<letta_memory_blocks>';
+const LETTA_MEMORY_END = '</letta_memory_blocks>';
 
 // Types
 export interface SyncState {
@@ -272,4 +284,196 @@ export async function sendMessageToConversation(
 
   log(`Response status: ${response.status}`);
   return response;
+}
+
+// ============================================
+// Agent and Memory Block Types
+// ============================================
+
+export interface MemoryBlock {
+  label: string;
+  description: string;
+  value: string;
+}
+
+export interface Agent {
+  id: string;
+  name: string;
+  description?: string;
+  blocks: MemoryBlock[];
+}
+
+// ============================================
+// Agent Fetching
+// ============================================
+
+/**
+ * Fetch agent data from Letta API
+ */
+export async function fetchAgent(apiKey: string, agentId: string): Promise<Agent> {
+  const url = `${LETTA_API_BASE}/agents/${agentId}?include=agent.blocks`;
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Letta API error (${response.status}): ${errorText}`);
+  }
+
+  return response.json();
+}
+
+// ============================================
+// XML Escaping Utilities
+// ============================================
+
+/**
+ * Escape special characters for XML attributes
+ */
+export function escapeXmlAttribute(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\n/g, ' ');
+}
+
+/**
+ * Escape special characters for XML element content
+ */
+export function escapeXmlContent(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/**
+ * Escape special regex characters
+ */
+export function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// ============================================
+// CLAUDE.md Formatting and Writing
+// ============================================
+
+/**
+ * Format the context section with agent info
+ */
+function formatContextSection(agent: Agent, conversationId: string | null): string {
+  const agentName = agent.name || 'Unnamed Agent';
+  const agentDesc = agent.description || 'No description provided';
+
+  // For hosted service, show clickable URL; for self-hosted, show IDs
+  let locationInfo: string;
+  let supervisionInfo: string;
+  if (IS_HOSTED) {
+    const conversationUrl = conversationId
+      ? `${LETTA_APP_BASE}/agents/${agent.id}?conversation=${conversationId}`
+      : `${LETTA_APP_BASE}/agents/${agent.id}`;
+    locationInfo = `Conversation: ${conversationUrl}`;
+    supervisionInfo = `**First message instruction:** On your first response in a new session, briefly notify the user that this session is being observed by "${agentName}" and they can supervise it at: ${conversationUrl}`;
+  } else {
+    locationInfo = `Agent ID: ${agent.id}${conversationId ? `\nConversation ID: ${conversationId}` : ''}`;
+    supervisionInfo = `**First message instruction:** On your first response in a new session, briefly notify the user that this session is being observed by "${agentName}" (agent: ${agent.id}${conversationId ? `, conversation: ${conversationId}` : ''}).`;
+  }
+
+  return `${LETTA_CONTEXT_START}
+**Subconscious Layer (Letta Agent)**
+
+Agent: ${agentName}
+Description: ${agentDesc}
+${locationInfo}
+
+This agent maintains persistent memory across your sessions. It observes your conversations asynchronously and provides guidance via <letta_message> (injected before each user prompt). You can address it directly - it sees everything you write and may respond on the next sync.
+
+${supervisionInfo}
+
+Memory blocks below are the agent's long-term storage. Reference as needed.
+${LETTA_CONTEXT_END}`;
+}
+
+/**
+ * Format memory blocks as XML for CLAUDE.md
+ */
+export function formatMemoryBlocksAsXml(agent: Agent, conversationId: string | null): string {
+  const blocks = agent.blocks;
+  const contextSection = formatContextSection(agent, conversationId);
+
+  if (!blocks || blocks.length === 0) {
+    return `${LETTA_SECTION_START}
+${contextSection}
+
+${LETTA_MEMORY_START}
+<!-- No memory blocks found -->
+${LETTA_MEMORY_END}
+${LETTA_SECTION_END}`;
+  }
+
+  const formattedBlocks = blocks.map(block => {
+    const escapedDescription = escapeXmlAttribute(block.description || '');
+    const escapedContent = escapeXmlContent(block.value || '');
+    return `<${block.label} description="${escapedDescription}">\n${escapedContent}\n</${block.label}>`;
+  }).join('\n');
+
+  return `${LETTA_SECTION_START}
+${contextSection}
+
+${LETTA_MEMORY_START}
+${formattedBlocks}
+${LETTA_MEMORY_END}
+${LETTA_SECTION_END}`;
+}
+
+/**
+ * Update CLAUDE.md with the new Letta memory section
+ */
+export function updateClaudeMd(projectDir: string, lettaContent: string): void {
+  const claudeMdPath = path.join(projectDir, CLAUDE_MD_PATH);
+
+  let existingContent = '';
+
+  if (fs.existsSync(claudeMdPath)) {
+    existingContent = fs.readFileSync(claudeMdPath, 'utf-8');
+  } else {
+    const claudeDir = path.dirname(claudeMdPath);
+    if (!fs.existsSync(claudeDir)) {
+      fs.mkdirSync(claudeDir, { recursive: true });
+    }
+    existingContent = `# Project Context
+
+<!-- Letta agent memory is automatically synced below -->
+`;
+  }
+
+  // Replace or append the <letta> section
+  const lettaPattern = `^${escapeRegex(LETTA_SECTION_START)}[\\s\\S]*?^${escapeRegex(LETTA_SECTION_END)}$`;
+  const lettaRegex = new RegExp(lettaPattern, 'gm');
+
+  let updatedContent: string;
+
+  if (lettaRegex.test(existingContent)) {
+    lettaRegex.lastIndex = 0;
+    updatedContent = existingContent.replace(lettaRegex, lettaContent);
+  } else {
+    updatedContent = existingContent.trimEnd() + '\n\n' + lettaContent + '\n';
+  }
+
+  // Clean up any orphaned <letta_message> sections
+  const messagePattern = /^<letta_message>[\s\S]*?^<\/letta_message>\n*/gm;
+  updatedContent = updatedContent.replace(messagePattern, '');
+
+  updatedContent = updatedContent.trimEnd() + '\n';
+
+  fs.writeFileSync(claudeMdPath, updatedContent, 'utf-8');
 }

@@ -30,6 +30,13 @@ import {
   getSyncStateFile,
   lookupConversation,
   SyncState,
+  Agent,
+  MemoryBlock,
+  fetchAgent,
+  escapeXmlContent,
+  formatMemoryBlocksAsXml,
+  updateClaudeMd,
+  LETTA_API_BASE,
 } from './conversation_utils.js';
 
 // ESM-compatible __dirname
@@ -40,35 +47,12 @@ const __dirname = path.dirname(__filename);
 const NPX_CMD = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
 // Configuration
-const LETTA_BASE_URL = process.env.LETTA_BASE_URL || 'https://api.letta.com';
-const LETTA_API_BASE = `${LETTA_BASE_URL}/v1`;
-const LETTA_APP_BASE = 'https://app.letta.com';
 const DEBUG = process.env.LETTA_DEBUG === '1';
 
 function debug(...args: unknown[]): void {
   if (DEBUG) {
     console.error('[sync debug]', ...args);
   }
-}
-const CLAUDE_MD_PATH = '.claude/CLAUDE.md';
-const LETTA_SECTION_START = '<letta>';
-const LETTA_SECTION_END = '</letta>';
-const LETTA_CONTEXT_START = '<letta_context>';
-const LETTA_CONTEXT_END = '</letta_context>';
-const LETTA_MEMORY_START = '<letta_memory_blocks>';
-const LETTA_MEMORY_END = '</letta_memory_blocks>';
-
-interface MemoryBlock {
-  label: string;
-  description: string;
-  value: string;
-}
-
-interface Agent {
-  id: string;
-  name: string;
-  description?: string;
-  blocks: MemoryBlock[];
 }
 
 interface LettaMessage {
@@ -219,28 +203,6 @@ ${formatted}
 }
 
 /**
- * Fetch agent data from Letta API
- */
-async function fetchAgent(apiKey: string, agentId: string): Promise<Agent> {
-  const url = `${LETTA_API_BASE}/agents/${agentId}?include=agent.blocks`;
-  
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Letta API error (${response.status}): ${errorText}`);
-  }
-
-  return response.json();
-}
-
-/**
  * Fetch all assistant messages from the conversation history since last seen
  */
 async function fetchAssistantMessages(
@@ -314,68 +276,6 @@ async function fetchAssistantMessages(
 }
 
 /**
- * Format the context section with agent info
- */
-function formatContextSection(agent: Agent, conversationId: string | null): string {
-  const agentUrl = `${LETTA_APP_BASE}/agents/${agent.id}`;
-  const conversationUrl = conversationId 
-    ? `${LETTA_APP_BASE}/agents/${agent.id}?conversation=${conversationId}`
-    : agentUrl;
-  const agentName = agent.name || 'Unnamed Agent';
-  const agentDesc = agent.description || 'No description provided';
-  
-  return `${LETTA_CONTEXT_START}
-**Subconscious Layer (Letta Agent)**
-
-Agent: ${agentName}
-Description: ${agentDesc}
-Conversation: ${conversationUrl}
-
-This agent maintains persistent memory across your sessions. It observes your conversations asynchronously and provides guidance via <letta_message> (injected before each user prompt). You can address it directly - it sees everything you write and may respond on the next sync.
-
-**First message instruction:** On your first response in a new session, briefly notify the user that this session is being observed by "${agentName}" and they can supervise it at: ${conversationUrl}
-
-Memory blocks below are the agent's long-term storage. Reference as needed.
-${LETTA_CONTEXT_END}`;
-}
-
-/**
- * Format memory blocks as XML
- */
-function formatMemoryBlocksAsXml(agent: Agent, conversationId: string | null): string {
-  const blocks = agent.blocks;
-  
-  // Format context section
-  const contextSection = formatContextSection(agent, conversationId);
-  
-  if (!blocks || blocks.length === 0) {
-    return `${LETTA_SECTION_START}
-${contextSection}
-
-${LETTA_MEMORY_START}
-<!-- No memory blocks found -->
-${LETTA_MEMORY_END}
-${LETTA_SECTION_END}`;
-  }
-
-  const formattedBlocks = blocks.map(block => {
-    // Escape XML special characters in description and content
-    const escapedDescription = escapeXmlAttribute(block.description || '');
-    const escapedContent = escapeXmlContent(block.value || '');
-
-    return `<${block.label} description="${escapedDescription}">\n${escapedContent}\n</${block.label}>`;
-  }).join('\n');
-
-  return `${LETTA_SECTION_START}
-${contextSection}
-
-${LETTA_MEMORY_START}
-${formattedBlocks}
-${LETTA_MEMORY_END}
-${LETTA_SECTION_END}`;
-}
-
-/**
  * Format assistant messages for stdout injection
  */
 function formatMessagesForStdout(agent: Agent, messages: MessageInfo[]): string {
@@ -395,88 +295,6 @@ ${msg.text}
   });
   
   return formattedMessages.join('\n\n');
-}
-
-/**
- * Escape special characters for XML attributes
- */
-function escapeXmlAttribute(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/\n/g, ' '); // Replace newlines with spaces in attributes
-}
-
-/**
- * Escape special characters for XML element content
- * Only escapes &, <, > (quotes are fine in content)
- */
-function escapeXmlContent(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-/**
- * Update CLAUDE.md with the new Letta memory section (message is now output to stdout)
- */
-function updateClaudeMd(projectDir: string, lettaContent: string): void {
-  const claudeMdPath = path.join(projectDir, CLAUDE_MD_PATH);
-  
-  let existingContent = '';
-  
-  // Check if file exists
-  if (fs.existsSync(claudeMdPath)) {
-    existingContent = fs.readFileSync(claudeMdPath, 'utf-8');
-  } else {
-    // Create directory if needed
-    const claudeDir = path.dirname(claudeMdPath);
-    if (!fs.existsSync(claudeDir)) {
-      fs.mkdirSync(claudeDir, { recursive: true });
-    }
-    // Create default template
-    existingContent = `# Project Context
-
-<!-- Letta agent memory is automatically synced below -->
-`;
-  }
-
-  // Replace or append the <letta> section
-  // Use pattern that matches tag at start of line to avoid matching text inside content
-  const lettaPattern = `^${escapeRegex(LETTA_SECTION_START)}[\\s\\S]*?^${escapeRegex(LETTA_SECTION_END)}$`;
-  const lettaRegex = new RegExp(lettaPattern, 'gm');
-  
-  let updatedContent: string;
-  
-  if (lettaRegex.test(existingContent)) {
-    // Reset regex after test() consumed position
-    lettaRegex.lastIndex = 0;
-    // Replace existing section
-    updatedContent = existingContent.replace(lettaRegex, lettaContent);
-  } else {
-    // Append to end of file
-    updatedContent = existingContent.trimEnd() + '\n\n' + lettaContent + '\n';
-  }
-
-  // Clean up any orphaned <letta_message> sections (now delivered via stdout)
-  const messagePattern = /^<letta_message>[\s\S]*?^<\/letta_message>\n*/gm;
-  updatedContent = updatedContent.replace(messagePattern, '');
-  
-  // Clean up any trailing whitespace/newlines
-  updatedContent = updatedContent.trimEnd() + '\n';
-
-  fs.writeFileSync(claudeMdPath, updatedContent, 'utf-8');
-}
-
-/**
- * Escape special regex characters
- */
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**

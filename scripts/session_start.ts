@@ -24,6 +24,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { getAgentId } from './agent_config.js';
+import {
+  fetchAgent,
+  formatMemoryBlocksAsXml,
+  updateClaudeMd,
+  createConversation,
+} from './conversation_utils.js';
 
 // Configuration
 const LETTA_BASE_URL = process.env.LETTA_BASE_URL || 'https://api.letta.com';
@@ -154,32 +160,6 @@ function saveSessionState(cwd: string, sessionId: string, conversationId: string
 }
 
 /**
- * Create a new conversation for a session
- */
-async function createConversation(apiKey: string, agentId: string): Promise<string> {
-  const url = `${LETTA_API_BASE}/conversations?agent_id=${agentId}`;
-
-  log(`Creating new conversation for agent ${agentId}`);
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to create conversation: ${response.status} ${errorText}`);
-  }
-
-  const conversation: Conversation = await response.json();
-  log(`Created conversation: ${conversation.id}`);
-  return conversation.id;
-}
-
-/**
  * Send session start message to Letta
  */
 async function sendSessionStartMessage(
@@ -275,14 +255,14 @@ async function main(): Promise<void> {
         // Agent ID changed - clear stale entry and create new conversation
         log(`Agent ID changed (${entry.agentId} -> ${agentId}), clearing stale conversation`);
         delete conversationsMap[hookInput.session_id];
-        conversationId = await createConversation(apiKey, agentId);
+        conversationId = await createConversation(apiKey, agentId, log);
         conversationsMap[hookInput.session_id] = { conversationId, agentId };
         saveConversationsMap(hookInput.cwd, conversationsMap);
       } else if (!entry.agentId) {
         // Old format without agentId - upgrade by recreating
         log(`Upgrading old format entry (no agentId stored), creating new conversation`);
         delete conversationsMap[hookInput.session_id];
-        conversationId = await createConversation(apiKey, agentId);
+        conversationId = await createConversation(apiKey, agentId, log);
         conversationsMap[hookInput.session_id] = { conversationId, agentId };
         saveConversationsMap(hookInput.cwd, conversationsMap);
       } else {
@@ -292,13 +272,20 @@ async function main(): Promise<void> {
       }
     } else {
       // No existing entry - create new conversation
-      conversationId = await createConversation(apiKey, agentId);
+      conversationId = await createConversation(apiKey, agentId, log);
       conversationsMap[hookInput.session_id] = { conversationId, agentId };
       saveConversationsMap(hookInput.cwd, conversationsMap);
     }
 
     // Save session state
     saveSessionState(hookInput.cwd, hookInput.session_id, conversationId);
+
+    // Sync memory to CLAUDE.md immediately so Claude has fresh agent/conversation IDs
+    log('Syncing memory to CLAUDE.md...');
+    const agent = await fetchAgent(apiKey, agentId);
+    const lettaContent = formatMemoryBlocksAsXml(agent, conversationId);
+    updateClaudeMd(hookInput.cwd, lettaContent);
+    log('Memory synced to CLAUDE.md');
 
     // Send session start message
     await sendSessionStartMessage(apiKey, conversationId, hookInput.session_id, hookInput.cwd);
